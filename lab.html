@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Sound Lab</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/lab.css">
+  <script type="module" src="js/lab/lab.js"></script>
+</head>
+<body class="lab">
+  <header class="topbar">
+    <div class="brand">
+      <img src="assets/icon.svg" alt="" width="34" height="34">
+      <div><strong><span data-app-name>EV Roar</span> Sound Lab</strong><small>파라미터를 귀로 듣고 맞추는 튜닝 페이지</small></div>
+    </div>
+    <div class="pills">
+      <span id="cpuPill" class="pill" data-state="idle">CPU —</span>
+      <a class="pill" href="index.html">← 앱으로</a>
+    </div>
+  </header>
+
+  <main class="lab-grid">
+    <section class="panel">
+      <h3>엔진</h3>
+      <div class="row">
+        <select id="presetSel"></select>
+        <button id="audioBtn" class="btn primary" type="button">오디오 시작</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="ignBtn" type="button">시동 시퀀스</button>
+        <button class="btn" id="stopBtn" type="button">정지</button>
+        <button class="btn" id="demoBtn" type="button">▶ 실시간 데모 런</button>
+      </div>
+
+      <h3>직접 조작</h3>
+      <div class="lab-sliders">
+        <label>RPM <output id="rpmOut"></output><input type="range" id="rpm" min="0" max="13000" step="10"></label>
+        <label>Throttle <output id="thrOut"></output><input type="range" id="thr" min="0" max="100" value="0"></label>
+        <label>Load <output id="loadOut"></output><input type="range" id="load" min="0" max="100" value="0"></label>
+        <label class="check"><input type="checkbox" id="linkLoad" checked> Load = Throttle 연동</label>
+      </div>
+      <div class="row">
+        <button class="btn" id="gearDown" type="button">기어 ↓</button>
+        <span class="gear-pill" id="gearOut">1</span>
+        <button class="btn" id="gearUp" type="button">기어 ↑</button>
+        <button class="btn" id="liftBtn" type="button">리프트오프</button>
+        <button class="btn" id="limBtn" type="button">리미터 (누르고 있기)</button>
+        <button class="btn" id="popBtn" type="button">시프트 팝</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="sweepBtn" type="button">rpm 스윕 (공회전→레드)</button>
+      </div>
+
+      <h3>전역 설정</h3>
+      <div class="lab-sliders" id="globalSliders"></div>
+
+      <h3>레이어 솔로 / 뮤트</h3>
+      <table class="layers" id="layerTable"></table>
+    </section>
+
+    <section class="panel">
+      <h3>분석</h3>
+      <div class="viz">
+        <label>스펙트럼</label><canvas id="spectrum" width="900" height="160"></canvas>
+        <label>합성음 스펙트로그램</label><canvas id="specSynth" width="900" height="200"></canvas>
+        <label>레퍼런스 스펙트로그램</label><canvas id="specRef" width="900" height="200"></canvas>
+        <label>파형</label><canvas id="wave" width="900" height="100"></canvas>
+      </div>
+
+      <h3>레퍼런스 비교 (로컬 파일, 업로드·배포 안 함)</h3>
+      <div class="row">
+        <input type="file" id="refFile" accept="audio/*">
+        <button class="btn" id="refPlay" type="button" disabled>레퍼런스 재생</button>
+        <button class="btn" id="abBtn" type="button" disabled>A/B: 합성음</button>
+        <button class="btn" id="matchBtn" type="button" disabled>레벨 맞춤</button>
+      </div>
+      <p class="hint left" id="refInfo">비교 포인트: ① 공회전 기본 주파수와 출렁임 주기 ② 2~4kHz 밝기 ③ 고rpm 배음 분포 ④ 리프트오프 후 팝 빈도</p>
+
+      <h3>오프라인 렌더 (데모 런 → WAV)</h3>
+      <div class="row">
+        <button class="btn primary" id="renderBtn" type="button">현재 설정으로 렌더</button>
+        <a id="wavLink" class="btn" hidden download>WAV 다운로드</a>
+      </div>
+      <audio id="wavAudio" controls hidden></audio>
+
+      <h3>프리셋 파라미터 <small>(변경 즉시 반영)</small></h3>
+      <div class="row">
+        <button class="btn primary" id="copyBtn" type="button">JSON 복사</button>
+        <button class="btn" id="resetBtn" type="button">기본값으로</button>
+        <span class="hint" id="copyMsg"></span>
+      </div>
+      <div id="paramEditor" class="param-editor"></div>
+      <p class="hint left" id="bankInfo"></p>
+    </section>
+  </main>
+</body>
+</html>

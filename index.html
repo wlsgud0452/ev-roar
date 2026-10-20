@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="color-scheme" content="dark">
+  <title>EV Roar</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="assets/icon.svg" alt="" width="34" height="34">
+      <div>
+        <strong data-app-name>EV Roar</strong>
+        <small data-app-tagline></small>
+      </div>
+    </div>
+    <div class="pills">
+      <span id="pillGps" class="pill" data-state="idle">Test drive</span>
+      <span id="pillEngine" class="pill" data-state="off">엔진 꺼짐</span>
+    </div>
+  </header>
+
+  <div id="notice" class="notice" hidden>
+    <p></p>
+    <button type="button" data-action hidden></button>
+    <button type="button" data-close aria-label="닫기">✕</button>
+  </div>
+
+  <main class="layout">
+    <section class="panel dash" aria-label="계기판">
+      <div class="gauge" id="gauge">
+        <svg viewBox="0 0 300 300" aria-hidden="true"></svg>
+        <div class="gauge-center">
+          <div class="speed"><span data-speed>0</span><small data-unit>km/h</small></div>
+          <div class="gear-row">
+            <div class="gear" data-gear>P</div>
+            <div class="rpm"><span data-rpm>0</span><small>rpm</small></div>
+          </div>
+          <div class="scale" data-scale>×1000 rpm</div>
+        </div>
+      </div>
+
+      <div class="throttle">
+        <span>THROTTLE</span>
+        <div class="bar"><i id="throttleBar"></i></div>
+      </div>
+
+      <div id="pedalArea" class="pedals">
+        <div class="pedal brake" id="pedalBrake" role="button" aria-label="브레이크 (아래쪽을 누를수록 강하게)">
+          <i class="fill"></i><span>BRAKE</span>
+        </div>
+        <div class="pedal gas" id="pedalGas" role="button" aria-label="가속 (아래쪽을 누를수록 강하게, 맨 위는 속도 유지)">
+          <i class="fill"></i><span>GAS</span>
+        </div>
+        <p class="hint">아래쪽을 누를수록 강하게 · GAS 맨 위 = 속도 유지 · 키보드 ↑ ↓ / Space</p>
+      </div>
+
+      <div id="revArea" class="rev-area" hidden>
+        <button id="revBtn" type="button" class="rev-btn">REV</button>
+        <p class="hint">정차 중에 길게 누르면 회전수가 올라갑니다</p>
+      </div>
+    </section>
+
+    <section class="panel controls" aria-label="컨트롤">
+      <button id="startBtn" type="button" class="start-btn">START ENGINE</button>
+
+      <div class="banner" id="banner">
+        <img data-banner-img alt="">
+        <div>
+          <h2 data-banner-name></h2>
+          <p data-banner-desc></p>
+          <ul data-banner-specs></ul>
+        </div>
+      </div>
+
+      <div class="car-grid" id="carGrid"></div>
+
+      <div class="row">
+        <div class="segmented" id="modeSeg" role="group" aria-label="속도 소스">
+          <button type="button" data-value="gps">GPS drive</button>
+          <button type="button" data-value="test">Test drive</button>
+        </div>
+        <button id="demoBtn" type="button" class="demo-btn">▶ 데모 런</button>
+      </div>
+
+      <div class="sliders" id="sliders"></div>
+
+      <div class="row">
+        <div class="segmented small" id="unitSeg" role="group" aria-label="속도 단위">
+          <button type="button" data-value="kmh">km/h</button>
+          <button type="button" data-value="mph">mph</button>
+        </div>
+        <label class="check"><input type="checkbox" id="sampleToggle"> 샘플 모드 (실험적)</label>
+      </div>
+    </section>
+  </main>
+
+  <section class="info">
+    <article class="card">
+      <h3>테슬라에서 쓰는 법</h3>
+      <ol>
+        <li>테슬라 브라우저에서 이 사이트(HTTPS 주소)를 엽니다.</li>
+        <li>차량 오디오를 원하는 볼륨으로 맞추고 <b>START ENGINE</b>을 누릅니다.</li>
+        <li><b>GPS drive</b>를 선택하고 위치 권한을 허용합니다. 정차 중엔 <b>REV</b>로 공회전을 띄울 수 있어요.</li>
+        <li>출발하면 GPS 속도에 맞춰 회전수·변속·팝이 실시간으로 합성됩니다. 주차 중에는 <b>Test drive</b>로 미리 들어보세요.</li>
+      </ol>
+    </article>
+    <article class="card">
+      <h3>슬라이더 설명</h3>
+      <dl id="sliderHelp"></dl>
+    </article>
+    <article class="card">
+      <h3>호환성 체크</h3>
+      <ul id="compatList" class="compat"></ul>
+    </article>
+    <article class="card warn">
+      <h3>안전 안내</h3>
+      <p>사이렌·경적·경고음이 묻히지 않도록 볼륨을 적당히 유지하세요. 주행 중에는 화면을 조작하지 말고, 설정은 정차 상태에서 바꾸세요. 소리는 실제 차량 상태와 무관한 합성음입니다.</p>
+    </article>
+  </section>
+
+  <footer class="footer">
+    <span data-app-name>EV Roar</span> · 녹음이 아닌 실시간 물리 기반 합성 · <a href="lab.html">사운드 튜닝 랩</a>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "ev-roar",
+  "private": true,
+  "type": "module",
+  "description": "EV용 실시간 합성 엔진 사운드 웹앱 (빌드 없는 정적 사이트)",
+  "scripts": {
+    "start": "npx serve .",
+    "test": "node --test tests/*.test.js"
+  }
+}
