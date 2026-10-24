@@ -54,8 +54,14 @@
         <button class="btn" id="sweepBtn" type="button">rpm 스윕 (공회전→레드)</button>
       </div>
 
-      <h3>전역 설정</h3>
+      <h3>튜닝 · 사운드 설정</h3>
       <div class="lab-sliders" id="globalSliders"></div>
+      <div class="row lab-toggles">
+        <label class="check"><input type="checkbox" id="tglValve" checked> 배기 밸브 열림</label>
+        <label class="check"><input type="checkbox" id="tglIntake"> 흡기 스포츠</label>
+        <label class="check"><input type="checkbox" id="tglPops" checked> 팝앤뱅</label>
+        <label class="check"><input type="checkbox" id="tglInterior"> 실내 청취</label>
+      </div>
 
       <h3>레이어 솔로 / 뮤트</h3>
       <table class="layers" id="layerTable"></table>
@@ -79,12 +85,21 @@
       </div>
       <p class="hint left" id="refInfo">비교 포인트: ① 공회전 기본 주파수와 출렁임 주기 ② 2~4kHz 밝기 ③ 고rpm 배음 분포 ④ 리프트오프 후 팝 빈도</p>
 
-      <h3>오프라인 렌더 (데모 런 → WAV)</h3>
+      <h3>시나리오 A/B (같은 입력으로 오프라인 렌더 → 동기 전환 재생)</h3>
       <div class="row">
-        <button class="btn primary" id="renderBtn" type="button">현재 설정으로 렌더</button>
-        <a id="wavLink" class="btn" hidden download>WAV 다운로드</a>
+        <select id="scenarioSel"></select>
       </div>
-      <audio id="wavAudio" controls hidden></audio>
+      <div class="row">
+        <button class="btn primary" id="renderA" type="button">A ← 현재 설정 렌더</button>
+        <button class="btn primary" id="renderB" type="button">B ← 현재 설정 렌더</button>
+        <button class="btn" id="abPlay" type="button" disabled>▶ 재생</button>
+        <button class="btn" id="abSwitch" type="button" disabled>듣는 중: A</button>
+      </div>
+      <p class="hint left" id="abInfo">A를 렌더한 뒤 파라미터·차량·흡배기 설정을 바꾸고 B를 렌더하세요. 두 버퍼를 같은 시점에서 재생하며 A/B 전환은 위치를 유지합니다(키보드 A / B).</p>
+      <div class="row">
+        <a id="wavA" class="btn" hidden download>A WAV</a>
+        <a id="wavB" class="btn" hidden download>B WAV</a>
+      </div>
 
       <h3>프리셋 파라미터 <small>(변경 즉시 반영)</small></h3>
       <div class="row">

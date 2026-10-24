@@ -1,12 +1,13 @@
 /**
  * AudioContext와 후처리 체인 구성.
  *
- * worklet(stereo) → 새츄레이션(tanh, 4x 오버샘플) → EQ(로우셸프/바디/프레즌스/하이컷)
- *   → 리버브(절차적 IR, dry+wet) → 스테레오 폭(뱅크 L/R 60:40 + 하스 딜레이)
- *   → 컴프레서 → 소프트 리미터 → 볼륨 → destination
+ * worklet(stereo) → 새츄레이션(tanh, 4x 오버샘플) → 하이패스(오디오 구성) → EQ(로우셸프/바디/프레즌스/하이컷)
+ *   → 실내/외부 청취(실내: 차체 차음 로우패스 + 캐빈 붐) → 리버브(절차적 IR, dry+wet)
+ *   → 스테레오 폭(뱅크 L/R 60:40 + 하스 딜레이) → 컴프레서 → 소프트 리미터 → 볼륨 → destination
  */
 import { createImpulseResponse } from './ir.js';
 import { Sampler } from './sampler.js';
+import { AUDIO_SYSTEMS } from '../presets/tesla.js';
 
 export const WORKLET_URL = new URL('./engine-worklet.js', import.meta.url).href;
 const SAT_K = 4;
@@ -49,6 +50,10 @@ export function buildChain(ctx, source, { preset, settings }) {
   shaper.curve = tanhCurve(SAT_K);
   shaper.oversample = '4x';
   const post = ctx.createGain();
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 22;
+  hp.Q.value = 0.7;
 
   const low = ctx.createBiquadFilter();
   low.type = 'lowshelf';
@@ -65,6 +70,16 @@ export function buildChain(ctx, source, { preset, settings }) {
   hicut.type = 'lowpass';
   hicut.frequency.value = 12000;
   hicut.Q.value = 0.7;
+  // 실내 청취: 차체가 고역을 깎고(로우패스) 실내 공명이 저역을 부풀린다(붐)
+  const cabin = ctx.createBiquadFilter();
+  cabin.type = 'lowpass';
+  cabin.frequency.value = 18000;
+  cabin.Q.value = 0.6;
+  const boom = ctx.createBiquadFilter();
+  boom.type = 'peaking';
+  boom.frequency.value = 75;
+  boom.Q.value = 1.1;
+  boom.gain.value = 0;
 
   const dry = ctx.createGain();
   const wet = ctx.createGain();
@@ -99,9 +114,10 @@ export function buildChain(ctx, source, { preset, settings }) {
   const vol = ctx.createGain();
 
   source.connect(input);
-  input.connect(pre).connect(shaper).connect(post).connect(low).connect(body).connect(presence).connect(hicut);
-  hicut.connect(dry).connect(sum);
-  hicut.connect(wet).connect(conv).connect(sum);
+  input.connect(pre).connect(shaper).connect(post).connect(hp).connect(low).connect(body).connect(presence).connect(hicut)
+    .connect(cabin).connect(boom);
+  boom.connect(dry).connect(sum);
+  boom.connect(wet).connect(conv).connect(sum);
   sum.connect(split);
   split.connect(gLL, 0); split.connect(gRL, 1);
   split.connect(gLR, 0); split.connect(gRR, 1);
@@ -113,17 +129,32 @@ export function buildChain(ctx, source, { preset, settings }) {
   const api = {
     input,
     output: vol,
+    presenceDb: 0,
     setPreset(p, when = ctx.currentTime) {
       body.frequency.setTargetAtTime(p.eq.bodyResHz, when, 0.05);
-      presence.gain.setTargetAtTime(p.eq.presenceDb, when, 0.05);
+      api.presenceDb = p.eq.presenceDb;
+      api.applyListen(when);
     },
     setSettings(s, when = ctx.currentTime) {
-      low.gain.setTargetAtTime(3 + (s.bass ?? 0.4) * 6, when, 0.05);
-      wet.gain.setTargetAtTime((s.space ?? 0.4) * 0.3, when, 0.05);
-      dry.gain.setTargetAtTime(1 - (s.space ?? 0.4) * 0.15, when, 0.05);
+      const sys = AUDIO_SYSTEMS[s.audioSystem] || AUDIO_SYSTEMS.premium;
+      api.interior = s.listen === 'interior';
+      low.gain.setTargetAtTime(3 + (s.bass ?? 0.4) * 6 + sys.bassDb, when, 0.05);
+      hp.frequency.setTargetAtTime(sys.hpHz, when, 0.05);
+      const space = (s.space ?? 0.4) * (api.interior ? 0.35 : 1);
+      wet.gain.setTargetAtTime(space * 0.3, when, 0.05);
+      dry.gain.setTargetAtTime(1 - space * 0.15, when, 0.05);
       vol.gain.setTargetAtTime(volumeToGain(s.volume ?? 0.8), when, 0.03);
       api.character = s.character ?? 0.5;
+      api.applyListen(when);
     },
+    /** 실내/외부 전환은 0.25초 시정수로 부드럽게 */
+    applyListen(when = ctx.currentTime) {
+      const inside = api.interior;
+      cabin.frequency.setTargetAtTime(inside ? 2600 : 18000, when, 0.25);
+      boom.gain.setTargetAtTime(inside ? 4.5 : 0, when, 0.25);
+      presence.gain.setTargetAtTime(api.presenceDb - (inside ? 4 : 0), when, 0.25);
+    },
+    interior: false,
     /** 부하/캐릭터에 따른 새츄레이션 드라이브 */
     setDrive(load, when = ctx.currentTime) {
       const drive = 1 + load * 2 + api.character * 1.5;
@@ -153,7 +184,14 @@ export function createEngineNode(ctx, processorOptions) {
 }
 
 /** 워크렛 파라미터로 보낼 설정만 추린다 */
-export const workletSettings = (s) => ({ character: s.character, crackle: s.crackle, bass: s.bass });
+export const workletSettings = (s) => ({
+  character: s.character,
+  crackle: s.crackle,
+  bass: s.bass,
+  valve: s.valve === 'closed' ? 0 : 1,
+  intake: s.intake === 'sport' ? 1 : 0,
+  pops: s.pops !== false,
+});
 
 /** 실시간 엔진 오디오 */
 export class EngineAudio {
@@ -192,6 +230,7 @@ export class EngineAudio {
       throttle: this.node.parameters.get('throttle'),
       load: this.node.parameters.get('load'),
       fuelCut: this.node.parameters.get('fuelCut'),
+      overrun: this.node.parameters.get('overrun'),
       volume: this.node.parameters.get('volume'),
     };
     // 제스처 없이 호출되면 resume()이 끝나지 않을 수 있으므로 무한 대기하지 않는다
@@ -215,12 +254,18 @@ export class EngineAudio {
     this.params.throttle.setTargetAtTime(s.throttle, t, 0.02);
     this.params.load.setTargetAtTime(s.load, t, 0.02);
     this.params.fuelCut.setValueAtTime(s.fuelCut ? 1 : 0, t);
+    this.params.overrun.setTargetAtTime(s.overrun || 0, t, 0.02);
     this.chain.setDrive(s.load, t);
     if (this.samplerActive) this.sampler.update(s.rpm, s.load);
   }
 
   post(msg) {
     if (this.node) this.node.port.postMessage(msg);
+  }
+
+  /** 음소거: 엔진·시뮬레이션은 계속 돌고 출력만 페이드 */
+  setMuted(muted) {
+    if (this.master) this.master.gain.setTargetAtTime(muted ? 0 : 1, this.ctx.currentTime, 0.05);
   }
 
   setPreset(preset) {

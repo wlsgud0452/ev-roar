@@ -7,6 +7,9 @@
  *   + 흡기(대역 노이즈 × 점화 AM + 헬름홀츠 공명) + 기계음(밸브 틱 + 고차 협대역) + 과급(터보 휘슬/블로우오프, 수퍼차저 와인)
  *   + 변속기 와인 + 팝/크래클/백파이어(점화 사이클 동기, 배기관 주입) + 서브베이스 + 스타터 모터
  *
+ * 같은 rpm이라도 부하(load)와 오버런(overrun, 감속 연료 차단)에 따라 펄스 세기·길이·머플러 밝기·흡기량이 달라져
+ * 가속 / 정속 / 감속 음색이 구분된다. 흡기(순정/스포츠)·배기 밸브(닫힘/열림)는 음색만 바꾸며 0.35초에 걸쳐 부드럽게 전환한다.
+ *
  * 외부 import 없음 (모든 브라우저의 워크렛 스코프에서 동작하도록). process() 안에서는 메모리를 할당하지 않는다.
  */
 
@@ -16,7 +19,7 @@ const MAX_POPS = 12;
 const DL_SIZE = 4096;
 const DL_MASK = DL_SIZE - 1;
 const SOUND_SPEED = 343;
-const FRAME_STRIDE = 5;
+const FRAME_STRIDE = 6; // [t, rpm, throttle, load, fuelCut, overrun]
 
 const nowMs = typeof globalThis.performance !== 'undefined' && typeof globalThis.performance.now === 'function'
   ? () => globalThis.performance.now()
@@ -128,7 +131,7 @@ const FALLBACK_PRESET = {
   pulse: { attackMs: 0.3, decayMs: 4, noiseAmt: 0.3 }, lope: 0.2, jitter: 0.5, misfireProb: 0.01,
   intake: { centerMin: 300, centerMax: 1400, resHz: 260 },
   mix: { exhaust: 0.6, intake: 0.14, mech: 0.06, forced: 0, trans: 0.02, sub: 0.07 },
-  forced: null, trans: { teeth: [29] }, outGain: 1,
+  forced: null, whine: { teeth: [29] }, pops: { amount: 0.6, big: 0.5, minRpm: 0.3 }, outGain: 1,
 };
 
 class EngineProcessor extends AudioWorkletProcessor {
@@ -138,6 +141,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       { name: 'throttle', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
       { name: 'load', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
       { name: 'fuelCut', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      { name: 'overrun', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
       { name: 'volume', defaultValue: 1, minValue: 0, maxValue: 2, automationRate: 'k-rate' },
     ];
   }
@@ -201,7 +205,8 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.bovHP.set('hp', 1400, 0.8, this.sr);
 
     // 상태
-    this.tRpm = 0; this.tThr = 0; this.tLoad = 0; this.tVol = 1;
+    this.tRpm = 0; this.tThr = 0; this.tLoad = 0; this.tVol = 1; this.tOv = 0; this.ov = 0;
+    this.valveS = 1; this.intakeS = 0;
     this.rpm = 0; this.rpmPrev = 0; this.thr = 0; this.thrSlow = 0; this.load = 0; this.vol = 1;
     this.fuelCut = false;
     this.ignition = false;
@@ -221,11 +226,15 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.fade = 1; this.fadeTarget = 1; this.pendingPreset = null;
     this.statsOn = false; this.stAcc = 0; this.stBlocks = 0; this.stAudio = 0; this.stMax = 0;
 
-    this.settings = { character: 0.5, crackle: 0.4, bass: 0.4 };
+    this.settings = { character: 0.5, crackle: 0.4, bass: 0.4, valve: 1, intake: 0, pops: true };
     this.layer = { exhaust: 1, intake: 1, mech: 1, forced: 1, trans: 1, pops: 1, sub: 1 };
     this.P = null;
     this.applyPreset(opts.preset || FALLBACK_PRESET, true);
-    if (opts.settings) this.applySettings(opts.settings);
+    if (opts.settings) {
+      this.applySettings(opts.settings);
+      this.valveS = this.settings.valve;
+      this.intakeS = this.settings.intake;
+    }
     if (opts.layers) Object.assign(this.layer, opts.layers);
 
     this.timeline = null;
@@ -254,7 +263,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       case 'starter': this.starterOn = !!msg.on; break;
       case 'gear': this.gearRatio = msg.ratio || 0; this.gearIndex = msg.gear || 0; break;
       case 'liftoff':
-        this.overrunDur = 0.3 + 1.7 * this.settings.crackle;
+        this.overrunDur = 0.3 + 1.7 * this.crackle();
         this.overrunT = this.overrunDur;
         break;
       case 'downshift':
@@ -276,6 +285,14 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (typeof s.character === 'number') this.settings.character = clamp(s.character, 0, 1);
     if (typeof s.crackle === 'number') this.settings.crackle = clamp(s.crackle, 0, 1);
     if (typeof s.bass === 'number') this.settings.bass = clamp(s.bass, 0, 1);
+    if (typeof s.valve === 'number') this.settings.valve = clamp(s.valve, 0, 1);
+    if (typeof s.intake === 'number') this.settings.intake = clamp(s.intake, 0, 1);
+    if (typeof s.pops === 'boolean') this.settings.pops = s.pops;
+  }
+
+  /** 팝앤뱅 OFF면 0 — 크래클 슬라이더는 강도 */
+  crackle() {
+    return this.settings.pops ? this.settings.crackle : 0;
   }
 
   applyPreset(p, hard) {
@@ -363,7 +380,9 @@ class EngineProcessor extends AudioWorkletProcessor {
       amp = 0.09;
       shortK = 0.6;
     } else {
-      amp = 0.32 + 0.68 * this.load;
+      // 오버런(감속 연료 차단) 중엔 압축·잔류 연소만 남은 약하고 짧은 펄스
+      amp = lerp(0.32 + 0.68 * this.load, 0.13, this.ov);
+      shortK = 1 - 0.3 * this.ov;
       if (this.misfire > 0 && this.rand() < this.misfire) amp *= 0.12 + 0.3 * this.rand();
     }
     amp *= this.cylAmp[cyl] * (1 + this.ampJit * (this.rand() * 2 - 1)) * (1 + this.lopeAmp * this.lopeS);
@@ -395,7 +414,8 @@ class EngineProcessor extends AudioWorkletProcessor {
   }
 
   maybePop(bank, wait) {
-    const c = this.settings.crackle;
+    const c = this.crackle();
+    const pp = this.P.pops || FALLBACK_PRESET.pops;
     if (c <= 0.001 || this.layer.pops <= 0) {
       this.shiftPopPending = false;
       return;
@@ -410,12 +430,14 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (this.fuelCut && this.limiterT > 0) p = 0.4;
     else if (this.ignition && this.thr < 0.1) {
       if (this.overrunT > 0) p = 0.55 * (this.overrunT / this.overrunDur);
-      else if (rn > 0.4) p = 0.025;
+      else if (rn > 0.4 || this.ov > 0.5) p = 0.025;
     }
     if (p <= 0) return;
-    p *= Math.pow(c, 1.3) * clamp((rn - 0.18) / 0.45, 0, 1);
+    // 차량 고유 성향(빈도·하한 rpm) × 크래클 강도 × 배기 밸브(열림일수록 잦음)
+    const vk = (this.valveS - 1) * (this.P.exhaust.valveRange ?? 0.7);
+    p *= Math.pow(c, 1.3) * clamp((rn - pp.minRpm) / 0.45, 0, 1) * (0.4 + pp.amount) * (1 + 0.8 * vk);
     if (this.rand() < p) {
-      const big = this.rand() < 0.05 + 0.13 * c;
+      const big = this.rand() < (0.05 + 0.13 * c) * (0.4 + 1.2 * pp.big);
       this.spawnPop(bank, wait, big ? 1.8 + 1.0 * this.rand() : 0.3 + 0.6 * this.rand(), big);
     }
   }
@@ -457,6 +479,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.tThr = f[o + 2];
     this.tLoad = f[o + 3];
     this.fuelCut = f[o + 4] >= 0.5;
+    this.tOv = f[o + 5];
     this.tVol = 1;
     while (tl.mi < tl.msgs.length && tl.msgs[tl.mi].t <= t) {
       this.handle(tl.msgs[tl.mi].msg);
@@ -474,6 +497,10 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.load += (this.tLoad - this.load) * (1 - Math.exp(-dtB / 0.025));
     this.vol += (this.tVol - this.vol) * (1 - Math.exp(-dtB / 0.02));
     this.thrSlow += (this.thr - this.thrSlow) * (1 - Math.exp(-dtB / 0.15));
+    this.ov += (this.tOv - this.ov) * (1 - Math.exp(-dtB / 0.04));
+    const kSw = 1 - Math.exp(-dtB / 0.35);
+    this.valveS += (this.settings.valve - this.valveS) * kSw;
+    this.intakeS += (this.settings.intake - this.intakeS) * kSw;
     this.ignGain += ((this.ignition ? 1 : 0) - this.ignGain) * (1 - Math.exp(-dtB / 0.06));
     this.starterGain += ((this.starterOn ? 1 : 0) - this.starterGain) * (1 - Math.exp(-dtB / 0.03));
     if (this.overrunT > 0) this.overrunT -= dtB;
@@ -498,6 +525,9 @@ class EngineProcessor extends AudioWorkletProcessor {
     const thr = this.thr;
     const idleF = clamp(1 - (rpm - P.idleRpm) / (P.idleRpm * 0.9), 0, 1);
     const L = this.layer;
+    const ov = this.ov;
+    const vk = (this.valveS - 1) * (P.exhaust.valveRange ?? 0.7); // 밸브 열림 0 ~ 닫힘 -valveRange
+    const isp = this.intakeS;
 
     this.fireFreq = (rpm / 60) * (P.cylinders / 2);
     this.fireInterval = this.fireFreq > 1 ? sr / this.fireFreq : sr;
@@ -506,7 +536,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     // 펄스 모양: rpm 높을수록, 부하 낮을수록 짧게
     this.tauD = P.pulse.decayMs * 0.001 * (1 - 0.55 * rn1) * (0.65 + 0.35 * load);
     this.tauA = P.pulse.attackMs * 0.001 * (1 - 0.3 * rn1);
-    this.noiseAmt = P.pulse.noiseAmt * (0.55 + 0.9 * ch) * (0.6 + 0.4 * load);
+    this.noiseAmt = P.pulse.noiseAmt * (0.55 + 0.9 * ch) * (0.6 + 0.4 * load) * (1 + 0.5 * ov) * (1 + 0.5 * vk);
     this.timeJit = (0.002 + 0.008 * idleF) * P.jitter * (0.7 + 0.6 * ch) * (1 - 0.6 * rn1);
     this.ampJit = (0.02 + 0.03 * idleF) * P.jitter * (0.8 + 0.4 * ch) * (1 - 0.5 * rn1);
     this.lopeDepth = P.lope * 0.045 * idleF * (0.4 + ch);
@@ -516,7 +546,8 @@ class EngineProcessor extends AudioWorkletProcessor {
 
     // 배기
     const ex = P.exhaust;
-    const fc = clamp(lerp(ex.mufflerCutoffMin, ex.mufflerCutoffMax, ch) * (0.8 + 0.4 * load) * (0.85 + 0.35 * rn1), 120, sr * 0.45);
+    const fc = clamp(lerp(ex.mufflerCutoffMin, ex.mufflerCutoffMax, ch) * (0.8 + 0.4 * load) * (0.85 + 0.35 * rn1)
+      * (1 - 0.35 * ov) * (1 + 0.6 * vk), 120, sr * 0.45);
     this.mufA[0].set('lp', fc, 0.62, sr);
     this.mufA[1].copyFrom(this.mufA[0]);
     this.mufB[0].set('lp', fc * 1.35, 0.7, sr);
@@ -524,19 +555,20 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.hFb = clamp(ex.feedback * (0.85 + 0.25 * ch), -0.93, 0.93);
     this.hLpA = 1 - Math.exp(-TWO_PI * (2500 + 6000 * ch) / sr);
     this.combG = 0.15 + 0.5 * ch;
-    this.combMix = 0.35 + 0.35 * ch;
-    this.tFb = -(0.12 + 0.28 * ch);
+    this.combMix = clamp(0.35 + 0.35 * ch - 0.3 * vk, 0.1, 0.9);
+    this.tFb = -(0.12 + 0.28 * ch) * (1 + 0.8 * vk);
     this.nzK = 1 - Math.exp(-TWO_PI * (1800 + 7000 * ch) / sr);
-    this.exGain = P.mix.exhaust * (0.65 + 0.7 * ch);
+    this.exGain = P.mix.exhaust * (0.65 + 0.7 * ch) * (1 + 0.5 * vk);
     this.exIn = L.exhaust;
 
     // 흡기: 풀스로틀 고rpm에서 "후아앙", 오프스로틀은 빠르게 감소
     const it = P.intake;
-    const inCenter = lerp(it.centerMin, it.centerMax, rn1);
+    const inCenter = lerp(it.centerMin, it.centerMax, rn1) * (1 + 0.12 * isp);
     this.inBP.set('bp', inCenter, 1.1, sr);
     this.inNorm = Math.sqrt(500 / inCenter); // 대역 노이즈 에너지는 중심주파수에 비례하므로 보정
-    this.inRes.set('bp', it.resHz * (0.9 + 0.3 * rn1), 6, sr);
-    const inTarget = (0.04 + Math.pow(thr, 1.5) * Math.min(rn * 1.2, 1.2)) * P.mix.intake * L.intake * 7;
+    this.inRes.set('bp', it.resHz * (0.9 + 0.3 * rn1), 6 + 4 * isp, sr);
+    const inTarget = (0.04 + Math.pow(thr, 1.5) * Math.min(rn * 1.2, 1.2)) * P.mix.intake * L.intake * 7
+      * (1 + 1.3 * isp) * (1 - 0.8 * ov);
     this.intakeLvl += (inTarget - this.intakeLvl) * (1 - Math.exp(-dtB / (inTarget > this.intakeLvl ? 0.05 : 0.03)));
 
     // 기계음
@@ -561,17 +593,18 @@ class EngineProcessor extends AudioWorkletProcessor {
       const f = lerp(F.fMin, F.fMax, this.spool);
       this.whInc = TWO_PI * f / sr;
       this.turbBP.set('bp', f * 0.5, 4, sr);
-      this.whLvl = this.spool * this.spool * (0.25 + 0.75 * thr) * P.mix.forced * L.forced * 1.5;
-      this.bovLvl = P.mix.forced * L.forced * 2.2;
+      this.whLvl = this.spool * this.spool * (0.25 + 0.75 * thr) * P.mix.forced * L.forced * 1.5 * (1 + 0.8 * isp);
+      this.bovLvl = P.mix.forced * L.forced * 2.2 * (1 + 0.6 * isp);
       this.flutter = F.bov === 'flutter';
     } else if (F && F.type === 'super') {
       this.scInc = TWO_PI * ((rpm / 60) * F.ratio) / sr;
-      this.scLvl = (0.15 + 0.85 * load) * Math.pow(rn1, 0.8) * (0.3 + 0.7 * thr) * P.mix.forced * L.forced * this.ignGain;
+      this.scLvl = (0.15 + 0.85 * load) * Math.pow(rn1, 0.8) * (0.3 + 0.7 * thr) * P.mix.forced * L.forced * this.ignGain * (1 + 0.5 * isp);
     }
 
     // 변속기 와인 (출력축 rpm × 기어 잇수)
     if (this.gearRatio > 0) {
-      const teeth = P.trans.teeth[Math.max(0, this.gearIndex - 1) % P.trans.teeth.length];
+      const wt = (P.whine || FALLBACK_PRESET.whine).teeth;
+      const teeth = wt[Math.max(0, this.gearIndex - 1) % wt.length];
       this.trInc = TWO_PI * ((rpm / this.gearRatio / 60) * teeth) / sr;
       this.trLvl = P.mix.trans * L.trans * (0.3 + 0.7 * load) * Math.min(1, rpm / 1500);
     } else {
@@ -582,9 +615,10 @@ class EngineProcessor extends AudioWorkletProcessor {
     let sf = this.fireFreq;
     while (sf > 0 && sf < 35) sf *= 2;
     this.subInc = TWO_PI * sf / sr;
-    this.subLvl = P.mix.sub * L.sub * (0.3 + 0.7 * load) * (0.4 + 1.2 * this.settings.bass) * this.ignGain * Math.min(1, rpm / 300);
+    this.subLvl = P.mix.sub * L.sub * (0.3 + 0.7 * load) * (0.4 + 1.2 * this.settings.bass) * this.ignGain * Math.min(1, rpm / 300)
+      * (1 - 0.5 * ov);
 
-    this.popGain = L.pops * 0.22;
+    this.popGain = L.pops * 0.22 * (1 + 0.8 * vk);
   }
 
   // ───────────────────────────── 렌더 ─────────────────────────────
@@ -603,6 +637,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       this.tThr = parameters.throttle[0];
       this.tLoad = parameters.load[0];
       this.fuelCut = parameters.fuelCut[0] >= 0.5;
+      this.tOv = parameters.overrun ? parameters.overrun[0] : 0;
       this.tVol = parameters.volume[0];
     }
 

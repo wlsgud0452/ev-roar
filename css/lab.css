@@ -42,3 +42,5 @@ select { flex: 1; }
 .param-editor .pair input[type="range"] { flex: 1; height: 28px; }
 .param-editor .pair input[type="number"] { width: 92px; min-height: 34px; }
 .param-editor input[type="text"] { min-height: 34px; width: 100%; }
+.lab-toggles { gap: 4px 16px; }
+#abInfo { min-height: 2.6em; }

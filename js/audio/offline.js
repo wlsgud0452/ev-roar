@@ -1,12 +1,12 @@
 /**
- * OfflineAudioContext로 데모 런을 렌더링하고 WAV로 인코딩한다 (사운드 비교·회귀 확인용).
+ * OfflineAudioContext로 고정 시나리오(데모 런 등)를 렌더링하고 WAV로 인코딩한다 (사운드 비교·A/B·회귀 확인용).
  * 시뮬레이터를 고정 dt로 돌려 만든 프레임/이벤트 타임라인을 processorOptions로 워크렛에 넘긴다.
  */
-import { simulateDemo, FRAME_STRIDE } from '../sim/demo.js';
+import { simulateScenario, FRAME_STRIDE } from '../sim/demo.js';
 import { buildChain, loadWorklet, createEngineNode, workletSettings } from './graph.js';
 
-export async function renderDemo(preset, settings, { sampleRate = 48000, layers } = {}) {
-  const { duration, frames, messages } = simulateDemo(preset, settings);
+export async function renderScenario(scenario, preset, settings, { sampleRate = 48000, layers } = {}) {
+  const { duration, frames, messages } = simulateScenario(scenario, preset, settings);
   const ctx = new OfflineAudioContext(2, Math.ceil(duration * sampleRate), sampleRate);
   await loadWorklet(ctx);
   const node = createEngineNode(ctx, {
@@ -21,6 +21,8 @@ export async function renderDemo(preset, settings, { sampleRate = 48000, layers 
   chain.output.connect(ctx.destination);
   return ctx.startRendering();
 }
+
+export const renderDemo = (preset, settings, opts) => renderScenario('demo', preset, settings, opts);
 
 /** AudioBuffer → 16-bit PCM WAV Blob */
 export function audioBufferToWav(buffer) {

@@ -1,14 +1,14 @@
 /**
  * 사운드 튜닝 랩: rpm/스로틀 직접 조작, 레이어 솔로/뮤트, 프리셋 실시간 편집 + JSON 복사,
- * 스펙트럼/스펙트로그램/파형, 로컬 레퍼런스 A/B, 데모 런 오프라인 WAV 렌더, 워크렛 CPU 측정.
+ * 스펙트럼/스펙트로그램/파형, 로컬 레퍼런스 A/B, 같은 시나리오 오프라인 렌더 A/B 비교, 워크렛 CPU 측정.
  */
 import { APP_NAME } from '../config.js';
 import { PRESETS, getPreset, bankIntervals } from '../presets/presets.js';
 import { EngineAudio, volumeToGain } from '../audio/graph.js';
-import { renderDemo, audioBufferToWav } from '../audio/offline.js';
+import { renderScenario, audioBufferToWav } from '../audio/offline.js';
 import { Vehicle } from '../sim/vehicle.js';
-import { DemoRun } from '../sim/demo.js';
-import { state as appState } from '../state.js';
+import { DemoRun, SCENARIOS } from '../sim/demo.js';
+import { state as appState, effectiveSettings } from '../state.js';
 
 const $ = (s) => document.querySelector(s);
 document.querySelectorAll('[data-app-name]').forEach((e) => { e.textContent = APP_NAME; });
@@ -18,10 +18,7 @@ const LAYERS = [
   ['exhaust', '배기'], ['intake', '흡기'], ['mech', '기계음'], ['forced', '과급기'],
   ['trans', '변속기 와인'], ['pops', '팝/크래클'], ['sub', '서브베이스'],
 ];
-const settings = {
-  volume: appState.volume, intensity: appState.intensity, character: appState.character,
-  crackle: appState.crackle, bass: appState.bass, space: appState.space,
-};
+const settings = effectiveSettings(appState);
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
 let working = clone(getPreset(appState.presetId));
@@ -156,7 +153,7 @@ function shiftTo(g) {
   const newRpm = Number(rpmIn.value) * (r[g - 1] / r[ctl.gear - 1]);
   if (up && settings.crackle > 0 && Number(thrIn.value) > 40) audio.post({ type: 'shiftPop' });
   if (!up && Number(thrIn.value) < 15) audio.post({ type: 'downshift' });
-  ctl.shiftT = working.shiftTime;
+  ctl.shiftT = up ? working.gearbox.upTime : working.gearbox.downTime;
   ctl.shiftTarget = newRpm;
   ctl.gear = g;
   $('#gearOut').textContent = String(g);
@@ -216,7 +213,8 @@ $('#demoBtn').addEventListener('click', async () => {
 });
 
 // ── 전역 설정 ──
-const GLOBALS = [['character', '캐릭터'], ['crackle', '크래클'], ['bass', '저음 강화'], ['space', '공간감'], ['intensity', '인텐시티'], ['volume', '볼륨']];
+const GLOBALS = [['character', '캐릭터'], ['crackle', '팝앤뱅 강도'], ['bass', '저음 강화'], ['space', '공간감'],
+  ['response', '가속 반응 감도'], ['shiftStyle', '변속 성향'], ['volume', '볼륨']];
 for (const [key, label] of GLOBALS) {
   const l = document.createElement('label');
   const out = document.createElement('output');
@@ -234,6 +232,21 @@ for (const [key, label] of GLOBALS) {
   });
   l.append(label, out, input);
   $('#globalSliders').append(l);
+}
+
+// 흡배기·팝·청취 토글 (음색만 바뀌고 시뮬레이터 계산은 그대로)
+const TOGGLES = [
+  ['#tglValve', 'valve', 'open', 'closed'], ['#tglIntake', 'intake', 'sport', 'stock'],
+  ['#tglPops', 'pops', true, false], ['#tglInterior', 'listen', 'interior', 'exterior'],
+];
+for (const [sel, key, on, off] of TOGGLES) {
+  const cb = $(sel);
+  cb.checked = settings[key] === on;
+  cb.addEventListener('change', () => {
+    settings[key] = cb.checked ? on : off;
+    vehicle.setSettings({ crackle: settings.pops ? settings.crackle : 0 });
+    if (audio) audio.setSettings(settings);
+  });
 }
 
 // ── 레이어 솔로/뮤트 ──
@@ -269,7 +282,9 @@ function pushLayers() {
 const RANGES = {
   idleRpm: [0, 5000, 10], redline: [3000, 16000, 50], limiterRpm: [3000, 17000, 50], launchRpm: [0, 8000, 50],
   rpmTauUp: [0.01, 0.4, 0.005], rpmTauDown: [0.01, 0.5, 0.005], finalDrive: [1, 10, 0.01], tireDiameter: [0.5, 0.9, 0.005],
-  shiftTime: [0, 0.5, 0.005], shiftLowRpm: [500, 11000, 50], downshiftRpm: [500, 9000, 50], bounceBeforeShift: [0, 0.5, 0.01],
+  bounceBeforeShift: [0, 0.5, 0.01],
+  'gearbox.upTime': [0, 0.6, 0.005], 'gearbox.downTime': [0, 0.6, 0.005], 'gearbox.cutRetain': [0, 1, 0.01], 'gearbox.lugRpm': [500, 4000, 10],
+  'exhaust.valveRange': [0, 1, 0.01], 'pops.amount': [0, 1.5, 0.01], 'pops.big': [0, 1.5, 0.01], 'pops.minRpm': [0, 1, 0.01],
   maxAccel: [1, 12, 0.1], valves: [0, 64, 1], polePairs: [1, 8, 1], lope: [0, 1.5, 0.01], jitter: [0, 1.5, 0.01],
   misfireProb: [0, 0.1, 0.001], outGain: [0, 3, 0.01],
   'exhaust.headerLen': [0.1, 1.5, 0.01], 'exhaust.tailLen': [0.1, 1.2, 0.01], 'exhaust.feedback': [-0.95, 0, 0.01],
@@ -279,7 +294,8 @@ const RANGES = {
   'eq.bodyResHz': [60, 400, 1], 'eq.presenceDb': [-6, 9, 0.1],
   'forced.lag': [0.1, 3, 0.01], 'forced.fMin': [500, 12000, 50], 'forced.fMax': [1000, 16000, 50], 'forced.ratio': [1, 40, 0.1],
 };
-const SKIP = new Set(['id', 'name', 'description', 'image', 'type', 'layout', 'firingOrder', 'cylinders']);
+const SKIP = new Set(['id', 'name', 'fullName', 'description', 'image', 'credit', 'type', 'layout', 'firingOrder', 'cylinders',
+  'soundMethod', 'specs', 'tuning']);
 const FORCED_DEFAULTS = {
   turbo: { type: 'turbo', lag: 0.8, fMin: 3000, fMax: 8000, bov: 'bov' },
   super: { type: 'super', ratio: 20 },
@@ -455,29 +471,99 @@ $('#copyBtn').addEventListener('click', async () => {
 });
 $('#resetBtn').addEventListener('click', () => loadPreset(getPreset(working.id)));
 
-// ── 오프라인 렌더 ──
-$('#renderBtn').addEventListener('click', async () => {
-  const btn = $('#renderBtn');
+// ── 시나리오 A/B: 같은 입력 타임라인을 오프라인 렌더해 동기 재생 ──
+const scenarioSel = $('#scenarioSel');
+for (const sc of SCENARIOS) {
+  const o = document.createElement('option');
+  o.value = sc.id;
+  o.textContent = sc.label;
+  scenarioSel.append(o);
+}
+const abSlots = { A: null, B: null };
+let abSources = null;
+let abListen = 'A';
+let abGains = null;
+
+async function renderSlot(slot) {
+  const btn = $(`#render${slot}`);
   btn.disabled = true;
+  const label = btn.textContent;
   btn.textContent = '렌더링 중…';
   try {
-    const t0 = performance.now();
-    const buffer = await renderDemo(working, settings, { layers: currentLayers() });
-    const blob = audioBufferToWav(buffer);
-    const url = URL.createObjectURL(blob);
-    const link = $('#wavLink');
+    stopAB();
+    const snapshot = { preset: clone(working), settings: { ...settings }, scenario: scenarioSel.value };
+    const buffer = await renderScenario(snapshot.scenario, snapshot.preset, snapshot.settings, { layers: currentLayers() });
+    abSlots[slot] = { ...snapshot, buffer };
+    const url = URL.createObjectURL(audioBufferToWav(buffer));
+    const link = $(`#wav${slot}`);
     link.href = url;
-    link.download = `${working.id}-demo.wav`;
+    link.download = `${snapshot.preset.id}-${snapshot.scenario}-${slot}.wav`;
     link.hidden = false;
-    const au = $('#wavAudio');
-    au.src = url;
-    au.hidden = false;
-    btn.textContent = `렌더 완료 (${buffer.duration.toFixed(1)}초 분량 / ${((performance.now() - t0) / 1000).toFixed(1)}초 소요) — 다시 렌더`;
+    paintABInfo();
   } catch (e) {
     console.error(e);
-    btn.textContent = `렌더 실패: ${e.message}`;
+    $('#abInfo').textContent = `렌더 실패: ${e.message}`;
   }
+  btn.textContent = label;
   btn.disabled = false;
+}
+
+function paintABInfo() {
+  const desc = (s) => (s ? `${s.preset.name} · ${s.scenario} · 밸브 ${s.settings.valve} · 흡기 ${s.settings.intake} · ${s.buffer.duration.toFixed(1)}초` : '—');
+  $('#abInfo').textContent = `A: ${desc(abSlots.A)}  /  B: ${desc(abSlots.B)}`;
+  const ready = abSlots.A || abSlots.B;
+  $('#abPlay').disabled = !ready;
+  $('#abSwitch').disabled = !(abSlots.A && abSlots.B);
+  if (abSlots.A && abSlots.B && abSlots.A.scenario !== abSlots.B.scenario) $('#abInfo').textContent += '  ⚠ 시나리오가 다릅니다';
+}
+
+function stopAB() {
+  if (abSources) for (const s of abSources) { try { s.stop(); } catch { /* 이미 정지 */ } }
+  abSources = null;
+  $('#abPlay').textContent = '▶ 재생';
+}
+
+function setABListen(slot) {
+  abListen = slot;
+  $('#abSwitch').textContent = `듣는 중: ${slot}`;
+  if (abGains && audio) {
+    const t = audio.ctx.currentTime;
+    abGains.A.gain.setTargetAtTime(slot === 'A' ? 1 : 0, t, 0.005);
+    abGains.B.gain.setTargetAtTime(slot === 'B' ? 1 : 0, t, 0.005);
+  }
+}
+
+$('#renderA').addEventListener('click', () => renderSlot('A'));
+$('#renderB').addEventListener('click', () => renderSlot('B'));
+$('#abPlay').addEventListener('click', async () => {
+  if (abSources) { stopAB(); return; }
+  if (!audio) await startAudio();
+  const ctx = audio.ctx;
+  if (!abGains) {
+    abGains = { A: ctx.createGain(), B: ctx.createGain() };
+    abGains.A.connect(ctx.destination);
+    abGains.B.connect(ctx.destination);
+  }
+  audio.master.gain.setTargetAtTime(0, ctx.currentTime, 0.01); // 실시간 합성음은 잠시 끈다
+  const when = ctx.currentTime + 0.05;
+  abSources = [];
+  for (const slot of ['A', 'B']) {
+    if (!abSlots[slot]) continue;
+    const src = ctx.createBufferSource();
+    src.buffer = abSlots[slot].buffer;
+    src.connect(abGains[slot]);
+    src.start(when);
+    src.onended = () => { if (abSources && abSources[0] === src) { stopAB(); audio.master.gain.setTargetAtTime(1, ctx.currentTime, 0.05); } };
+    abSources.push(src);
+  }
+  setABListen(abSlots[abListen] ? abListen : abSlots.A ? 'A' : 'B');
+  $('#abPlay').textContent = '■ 정지';
+});
+$('#abSwitch').addEventListener('click', () => setABListen(abListen === 'A' ? 'B' : 'A'));
+window.addEventListener('keydown', (e) => {
+  if (e.target.closest?.('input, select, textarea') || !abSources) return;
+  if (e.code === 'KeyA' && abSlots.A) setABListen('A');
+  if (e.code === 'KeyB' && abSlots.B) setABListen('B');
 });
 
 // ── 레퍼런스 A/B ──
@@ -700,7 +786,7 @@ function directStep(dt) {
     ctl.shiftT -= dt;
     fuelCut = true;
     target = ctl.shiftTarget;
-    tau = Math.max(P.shiftTime / 2.5, 0.012);
+    tau = Math.max(P.gearbox.upTime / 2.5, 0.02);
   }
   if (P.type !== 'ev' && P.limiterRpm) {
     if (ctl.limCut) {
@@ -722,7 +808,8 @@ function directStep(dt) {
   ctl.load += (loadT - ctl.load) * (1 - Math.exp(-dt / (loadT > ctl.load ? 0.05 : 0.3)));
   ctl.thr = thr;
   $('#rpmOut').textContent = `${Math.round(ctl.rpm)} rpm`;
-  return { rpm: ctl.rpm, throttle: thr, load: ctl.load, fuelCut };
+  const overrun = thr < 0.05 && P.type !== 'ev' && ctl.rpm > (P.idleRpm || 0) * 1.3 ? 1 : 0;
+  return { rpm: ctl.rpm, throttle: thr, load: ctl.load, fuelCut, overrun };
 }
 
 setupRpmSlider();

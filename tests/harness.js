@@ -23,7 +23,7 @@ export class Runner {
   constructor(Proc, processorOptions, sampleRate = SR) {
     this.sr = sampleRate;
     this.proc = new Proc({ processorOptions });
-    this.params = { rpm: 0, throttle: 0, load: 0, fuelCut: 0, volume: 1 };
+    this.params = { rpm: 0, throttle: 0, load: 0, fuelCut: 0, overrun: 0, volume: 1 };
     this.L = new Float32Array(128);
     this.R = new Float32Array(128);
     this.t = 0;

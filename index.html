@@ -32,7 +32,16 @@
   </div>
 
   <main class="layout">
+    <!-- ── 주행 화면: 차량 · RPM · 기어 · AUTO/MANUAL · 변속 ── -->
     <section class="panel dash" aria-label="계기판">
+      <div class="dash-car" id="dashCar">
+        <img data-dash-img alt="">
+        <div>
+          <strong data-dash-name></strong>
+          <small data-dash-sub></small>
+        </div>
+      </div>
+
       <div class="gauge" id="gauge">
         <svg viewBox="0 0 300 300" aria-hidden="true"></svg>
         <div class="gauge-center">
@@ -41,9 +50,26 @@
             <div class="gear" data-gear>P</div>
             <div class="rpm"><span data-rpm>0</span><small>rpm</small></div>
           </div>
-          <div class="scale" data-scale>×1000 rpm</div>
+          <div class="drive-badge" id="driveBadge">AUTO · C</div>
+        </div>
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      </div>
+
+      <div class="drive-row">
+        <div class="segmented" id="driveSeg" role="group" aria-label="변속 모드">
+          <button type="button" data-value="auto">AUTO</button>
+          <button type="button" data-value="manual">MANUAL</button>
+        </div>
+        <div class="segmented" id="styleSeg" role="group" aria-label="AUTO 변속 성향">
+          <button type="button" data-value="comfort">Comfort</button>
+          <button type="button" data-value="sport">Sport</button>
+        </div>
+        <div class="shift-btns" id="shiftBtns">
+          <button type="button" class="shift-btn" id="shiftDown" aria-label="다운시프트 (Q)">−</button>
+          <button type="button" class="shift-btn" id="shiftUp" aria-label="업시프트 (E)">+</button>
         </div>
       </div>
+      <p class="hint" id="shiftHint">MANUAL: 화면 − / + · 키보드 Q / E · 휠 다음/이전 곡(지원 시)</p>
 
       <div class="throttle">
         <span>THROTTLE</span>
@@ -60,14 +86,51 @@
         <p class="hint">아래쪽을 누를수록 강하게 · GAS 맨 위 = 속도 유지 · 키보드 ↑ ↓ / Space</p>
       </div>
 
-      <div id="revArea" class="rev-area" hidden>
+      <div id="revArea" class="rev-area">
         <button id="revBtn" type="button" class="rev-btn">REV</button>
-        <p class="hint">정차 중에 길게 누르면 회전수가 올라갑니다</p>
+        <button id="blipBtn" type="button" class="rev-btn blip">BLIP</button>
+        <p class="hint">정차 중 · REV는 길게 눌러 회전 올리기, BLIP은 짧게 한 번 치기</p>
       </div>
     </section>
 
     <section class="panel controls" aria-label="컨트롤">
-      <button id="startBtn" type="button" class="start-btn">START ENGINE</button>
+      <div class="row start-row">
+        <button id="startBtn" type="button" class="start-btn">START ENGINE</button>
+        <button id="muteBtn" type="button" class="mute-btn" aria-pressed="false" aria-label="음소거">🔊</button>
+      </div>
+
+      <!-- ── 흡배기 · 추가 사운드: 주행·변속 계산은 그대로 두고 음색만 바꾼다 ── -->
+      <div class="sound-grid">
+        <div class="sound-item">
+          <span>흡기음</span>
+          <div class="segmented small" id="intakeSeg" role="group" aria-label="흡기음">
+            <button type="button" data-value="stock">순정</button>
+            <button type="button" data-value="sport">스포츠</button>
+          </div>
+        </div>
+        <div class="sound-item">
+          <span>배기 밸브</span>
+          <div class="segmented small" id="valveSeg" role="group" aria-label="배기 밸브">
+            <button type="button" data-value="closed">닫힘</button>
+            <button type="button" data-value="open">열림</button>
+          </div>
+        </div>
+        <div class="sound-item">
+          <span>팝앤뱅</span>
+          <div class="segmented small" id="popsSeg" role="group" aria-label="팝앤뱅">
+            <button type="button" data-value="off">OFF</button>
+            <button type="button" data-value="on">ON</button>
+          </div>
+        </div>
+        <div class="sound-item">
+          <span>청취 위치</span>
+          <div class="segmented small" id="listenSeg" role="group" aria-label="청취 위치">
+            <button type="button" data-value="exterior">외부</button>
+            <button type="button" data-value="interior">실내</button>
+          </div>
+        </div>
+      </div>
+      <p class="hint left">흡기·배기 버튼은 가상 사운드 연출입니다. 실제 가변 흡기·배기 장치의 동작을 재현하지 않으며 rpm·기어 계산에는 영향을 주지 않습니다.</p>
 
       <div class="banner" id="banner">
         <img data-banner-img alt="">
@@ -77,6 +140,7 @@
           <ul data-banner-specs></ul>
         </div>
       </div>
+      <p class="credit" data-banner-credit></p>
 
       <div class="car-grid" id="carGrid"></div>
 
@@ -88,14 +152,41 @@
         <button id="demoBtn" type="button" class="demo-btn">▶ 데모 런</button>
       </div>
 
-      <div class="sliders" id="sliders"></div>
-
-      <div class="row">
-        <div class="segmented small" id="unitSeg" role="group" aria-label="속도 단위">
-          <button type="button" data-value="kmh">km/h</button>
-          <button type="button" data-value="mph">mph</button>
+      <button id="settingsBtn" type="button" class="drawer-btn" aria-expanded="false" aria-controls="settingsPanel">상세 설정 ▾</button>
+      <div id="settingsPanel" class="drawer" hidden>
+        <h3>튜닝 <small id="tuningFor"></small></h3>
+        <div class="sliders" id="sliders"></div>
+        <div class="row">
+          <button id="resetTuning" type="button" class="small-btn">차량 기본값으로 복원</button>
+          <span class="hint" id="tuningState"></span>
         </div>
-        <label class="check"><input type="checkbox" id="sampleToggle"> 샘플 모드 (실험적)</label>
+
+        <h3>탑승 차량 보정 <small>(실제 테슬라)</small></h3>
+        <div class="form-grid">
+          <label>모델
+            <select id="teslaSel"></select>
+          </label>
+          <label>회생제동
+            <select id="regenSel"></select>
+          </label>
+          <label>오디오 구성
+            <select id="audioSel"></select>
+          </label>
+        </div>
+        <p class="hint left">GPS 가속도를 이 차의 최대 가속력 대비 "페달을 얼마나 밟았는가"로 바꿔 가상 엔진의 부하를 추정합니다. 회생제동 정도의 감속은 리프트오프(오버런)로, 신호가 끊기면 정속 부하로 처리합니다. 실제 페달 입력값이 아닌 추정값입니다.</p>
+
+        <h3>휠 노브 변속 연동</h3>
+        <p class="wheel-status" id="wheelStatus"></p>
+        <p class="hint left">MANUAL에서 휠의 다음/이전 곡 동작을 업/다운시프트로 씁니다. 브라우저가 미디어 세션 이벤트를 받는 경우에만 동작하며 차종·소프트웨어별 지원은 아직 확인되지 않았습니다. 위 표시가 "감지됨"으로 바뀌지 않으면 화면 − / + 또는 키보드 Q / E를 쓰세요.</p>
+
+        <h3>기타</h3>
+        <div class="row">
+          <div class="segmented small" id="unitSeg" role="group" aria-label="속도 단위">
+            <button type="button" data-value="kmh">km/h</button>
+            <button type="button" data-value="mph">mph</button>
+          </div>
+          <label class="check"><input type="checkbox" id="sampleToggle"> 샘플 모드 (실험적)</label>
+        </div>
       </div>
     </section>
   </main>
@@ -106,12 +197,12 @@
       <ol>
         <li>테슬라 브라우저에서 이 사이트(HTTPS 주소)를 엽니다.</li>
         <li>차량 오디오를 원하는 볼륨으로 맞추고 <b>START ENGINE</b>을 누릅니다.</li>
-        <li><b>GPS drive</b>를 선택하고 위치 권한을 허용합니다. 정차 중엔 <b>REV</b>로 공회전을 띄울 수 있어요.</li>
-        <li>출발하면 GPS 속도에 맞춰 회전수·변속·팝이 실시간으로 합성됩니다. 주차 중에는 <b>Test drive</b>로 미리 들어보세요.</li>
+        <li><b>GPS drive</b>를 선택하고 위치 권한을 허용합니다. 상세 설정에서 탑승 중인 테슬라 모델을 고르면 가속 반응이 맞춰집니다.</li>
+        <li><b>AUTO</b>는 Comfort / Sport에 따라 알아서 변속하고, <b>MANUAL</b>은 − / + 버튼(또는 지원 시 휠)으로 직접 변속합니다. 과회전이 되는 다운시프트는 막히고, 회전이 너무 떨어지면 자동으로 내려갑니다.</li>
       </ol>
     </article>
     <article class="card">
-      <h3>슬라이더 설명</h3>
+      <h3>설정 설명</h3>
       <dl id="sliderHelp"></dl>
     </article>
     <article class="card">
@@ -120,12 +211,12 @@
     </article>
     <article class="card warn">
       <h3>안전 안내</h3>
-      <p>사이렌·경적·경고음이 묻히지 않도록 볼륨을 적당히 유지하세요. 주행 중에는 화면을 조작하지 말고, 설정은 정차 상태에서 바꾸세요. 소리는 실제 차량 상태와 무관한 합성음입니다.</p>
+      <p>사이렌·경적·경고음이 묻히지 않도록 볼륨을 적당히 유지하세요. 주행 중에는 화면을 조작하지 말고, 설정은 정차 상태에서 바꾸세요. 소리는 실제 차량 상태와 무관한 합성음이며, 차량 이름은 소리의 모델을 설명하기 위한 것으로 각 제조사와 관련이 없습니다.</p>
     </article>
   </section>
 
   <footer class="footer">
-    <span data-app-name>EV Roar</span> · 녹음이 아닌 실시간 물리 기반 합성 · <a href="lab.html">사운드 튜닝 랩</a>
+    <span data-app-name>EV Roar</span> · 녹음이 아닌 실시간 물리 기반 합성 · <a href="lab.html">사운드 튜닝 랩</a> · <a href="assets/cars/CREDITS.md">사진 출처</a>
   </footer>
 </body>
 </html>

@@ -2,13 +2,16 @@
  * 슬라이더, 세그먼트 토글, 길게 누르기 버튼.
  */
 export const SLIDERS = [
-  { key: 'volume', label: '볼륨', desc: '전체 음량. 사이렌·경고음이 묻히지 않을 만큼만.' },
-  { key: 'intensity', label: '인텐시티', desc: '변속 시점과 스로틀 민감도. 높을수록 더 높은 rpm까지 끌고 올라가고, GPS 가속에 더 민감하게 반응합니다.' },
-  { key: 'character', label: '캐릭터', desc: '0% 순정 머플러(둔하고 조용한 실내음) → 100% 스트레이트 파이프(밝고 거칠고 공명이 강함).' },
-  { key: 'crackle', label: '크래클', desc: '리프트오프·변속·리미터 때 나오는 팝/백파이어 양. 0%면 완전히 깨끗합니다.' },
-  { key: 'bass', label: '저음 강화', desc: '점화 기본주파수 서브베이스와 저역 셸프. 차량 스피커에서 존재감을 키웁니다.' },
-  { key: 'space', label: '공간감', desc: '짧은 잔향으로 배기음이 공간에서 울리는 느낌을 더합니다.' },
+  { key: 'volume', label: '볼륨', desc: '전체 음량 (모든 차량 공통). 사이렌·경고음이 묻히지 않을 만큼만.' },
+  { key: 'character', label: '캐릭터', desc: '0% 순정 머플러(둔하고 조용함) → 100% 스트레이트 파이프(밝고 거칠고 공명이 강함).' },
+  { key: 'crackle', label: '팝앤뱅 강도', desc: '리프트오프·변속·리미터 때 나오는 팝/백파이어 양. 팝앤뱅 OFF거나 0%면 완전히 깨끗합니다. 발생 빈도는 차량 특성·rpm·배기 밸브에 따라 달라집니다.' },
+  { key: 'bass', label: '저음 강화', desc: '점화 기본주파수 서브베이스와 저역 셸프. 오디오 구성 보정과 별개로 취향에 맞춰 더합니다.' },
+  { key: 'space', label: '공간감', desc: '짧은 잔향으로 배기음이 공간에서 울리는 느낌을 더합니다. 실내 청취에선 자동으로 줄어듭니다.' },
+  { key: 'response', label: '가속 반응 감도', desc: '페달·GPS 가속에 스로틀이 얼마나 민감하게 반응할지. 높을수록 살짝만 가속해도 엔진이 크게 반응합니다.' },
+  { key: 'shiftStyle', label: '변속 성향', desc: 'AUTO 변속 맵 안에서 이른 변속(낮음, 조용) ↔ 늦은 변속(높음, 고회전 유지). Comfort / Sport 위에 덧붙는 미세 조정입니다.' },
 ];
+
+const pct = (v) => `${Math.round(v * 100)}%`;
 
 export function buildSliders(container, values, onChange) {
   container.replaceChildren();
@@ -27,17 +30,25 @@ export function buildSliders(container, values, onChange) {
     input.min = '0';
     input.max = '100';
     input.step = '1';
-    input.value = String(Math.round(values[s.key] * 100));
-    val.textContent = `${input.value}%`;
     input.addEventListener('input', () => {
       val.textContent = `${input.value}%`;
       onChange(s.key, Number(input.value) / 100);
     });
     row.append(head, input);
     container.append(row);
-    inputs[s.key] = input;
+    inputs[s.key] = { input, val };
   }
+  setSliderValues(inputs, values);
   return inputs;
+}
+
+/** 차량 변경·초기화 후 슬라이더 위치만 다시 맞춘다 (onChange는 부르지 않음) */
+export function setSliderValues(inputs, values) {
+  for (const [key, { input, val }] of Object.entries(inputs)) {
+    if (typeof values[key] !== 'number') continue;
+    input.value = String(Math.round(values[key] * 100));
+    val.textContent = pct(values[key]);
+  }
 }
 
 export function buildSliderHelp(container) {
