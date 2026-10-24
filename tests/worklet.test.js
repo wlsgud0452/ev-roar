@@ -231,3 +231,40 @@ test('A/B 시나리오(같은 rpm 3상태 · 변속)를 타임라인 모드로 �
     }
   }
 });
+
+test('엔진이 꺼져 있으면 출력이 완전히 무음 (상시 노이즈 없음)', () => {
+  for (const p of PRESETS) {
+    const r = new Runner(Proc, { preset: p, settings: p.tuning });
+    const [L] = r.render(0.5);
+    assert.equal(peak(L), 0, `${p.id} 꺼짐 상태 피크 ${peak(L)}`);
+  }
+});
+
+test('공회전 랜덤 노이즈 성분이 엔진음보다 15dB 이상 작다 (모든 차종)', () => {
+  const run = (p, seed) => {
+    const q = { ...p, jitter: 0, lope: 0, misfireProb: 0 };
+    const r = new Runner(Proc, { preset: q, settings: { ...p.tuning, pops: false } });
+    r.proc.seed = seed;
+    r.send({ type: 'ignition', on: true });
+    return r.render(1, (t, prm) => { prm.rpm = p.idleRpm; })[0];
+  };
+  for (const p of PRESETS.filter((x) => x.type !== 'ev')) {
+    const a = run(p, 123);
+    const b = run(p, 987654);
+    const diff = a.map((x, i) => (x - b[i]) / Math.SQRT2);
+    const gap = db(rms(a, 12000)) - db(rms(diff, 12000));
+    assert.ok(gap > 15, `${p.id}: 노이즈가 엔진음보다 ${gap.toFixed(1)}dB 작음`);
+  }
+});
+
+test('크랭킹: 압축 펄스("그르릉")가 스타터 모터 소리보다 크다', () => {
+  for (const p of PRESETS.filter((x) => x.type !== 'ev')) {
+    const lv = (layers) => {
+      const r = new Runner(Proc, { preset: p, settings: p.tuning, layers });
+      r.send({ type: 'starter', on: true });
+      const [L] = r.render(1, (t, prm) => { prm.rpm = 210 + 30 * Math.sin(t * 23); });
+      return db(rms(L, 6000));
+    };
+    assert.ok(lv() > lv({ exhaust: 0 }) + 4, p.id);
+  }
+});

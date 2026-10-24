@@ -203,6 +203,10 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.bovHP = new Biquad();
     this.evLP = new Biquad();
     this.bovHP.set('hp', 1400, 0.8, this.sr);
+    this.stBP = new Biquad();
+    this.stBP.set('bp', 1100, 1.4, this.sr);
+    this.mechEnvD = Math.exp(-1 / (0.0015 * this.sr));
+    this.stLoadK = 1 - Math.exp(-1 / (0.015 * this.sr));
 
     // 상태
     this.tRpm = 0; this.tThr = 0; this.tLoad = 0; this.tVol = 1; this.tOv = 0; this.ov = 0;
@@ -217,7 +221,8 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.gearIndex = 0;
     this.phase = 0; this.nextIdx = 0; this.cycleOff = 0; this.nextAngle = 0;
     this.lopePh = 0; this.lopeS = 0; this.lopeHz = 1;
-    this.inPh = 0; this.camPh = 0; this.clickE = 0; this.mechPrev = 0;
+    this.inPh = 0; this.camPh = 0; this.clickE = 0; this.mechPrev = 0; this.mechEnv = 0;
+    this.stLoad = 0;
     this.whPh = 0; this.scPh = 0; this.trPh = 0; this.subPh = 0; this.stPh = 0;
     this.spool = 0; this.bovT = -1; this.bovAmp = 0; this.bovCool = 0;
     this.overrunT = 0; this.overrunDur = 1; this.limiterT = 0; this.shiftPopPending = false;
@@ -354,6 +359,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     }
     this.vActive.fill(0);
     this.pActive.fill(0);
+    this.stBP.reset();
     this.inBP.reset(); this.inRes.reset(); this.mechBP.reset(); this.turbBP.reset(); this.bovHP.reset(); this.evLP.reset();
     this.spool = 0; this.bovT = -1;
   }
@@ -374,7 +380,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     let amp;
     let shortK = 1;
     if (!this.ignition) {
-      amp = this.starterOn ? 0.2 : 0.07; // 압축·공기 펄스만
+      amp = this.starterOn ? 0.3 : 0.07; // 압축·공기 펄스만 (크랭킹의 "그르릉"은 주로 이 펄스)
       shortK = 0.6;
     } else if (this.fuelCut) {
       amp = 0.09;
@@ -567,7 +573,9 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.inBP.set('bp', inCenter, 1.1, sr);
     this.inNorm = Math.sqrt(500 / inCenter); // 대역 노이즈 에너지는 중심주파수에 비례하므로 보정
     this.inRes.set('bp', it.resHz * (0.9 + 0.3 * rn1), 6 + 4 * isp, sr);
-    const inTarget = (0.04 + Math.pow(thr, 1.5) * Math.min(rn * 1.2, 1.2)) * P.mix.intake * L.intake * 7
+    // 기본 흡기 소음은 엔진이 돌 때만 (꺼져 있을 때 노이즈가 남지 않도록)
+    const inBase = 0.012 * this.ignGain * Math.min(1, rpm / 300);
+    const inTarget = (inBase + Math.pow(thr, 1.5) * Math.min(rn * 1.2, 1.2)) * P.mix.intake * L.intake * 7
       * (1 + 1.3 * isp) * (1 - 0.8 * ov);
     this.intakeLvl += (inTarget - this.intakeLvl) * (1 - Math.exp(-dtB / (inTarget > this.intakeLvl ? 0.05 : 0.03)));
 
@@ -575,7 +583,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.valveInc = (rpm / 120) * P.valves / sr;
     this.mechBP.set('bp', clamp(this.fireFreq * 9, 300, 7500), 7, sr);
     this.clickD = Math.exp(-1 / (0.0003 * sr));
-    this.mechLvl = P.mix.mech * L.mech * (0.7 + 0.3 * rn1) * this.ignGain * 4;
+    this.mechLvl = P.mix.mech * L.mech * (0.3 + 0.7 * rn1) * (0.6 + 0.4 * load) * this.ignGain * 4;
 
     // 과급기
     const F = P.forced;
@@ -823,13 +831,15 @@ class EngineProcessor extends AudioWorkletProcessor {
       // ── 기계음: 밸브 틱 + 고차 협대역 ──
       if (this.mechLvl > 1e-5) {
         this.camPh += this.valveInc;
-        if (this.camPh >= 1) { this.camPh -= 1; this.clickE = 0.5 + 0.5 * this.rand(); }
+        if (this.camPh >= 1) { this.camPh -= 1; this.clickE = 0.5 + 0.5 * this.rand(); this.mechEnv = 1; }
         const nzm = this.rand() * 2 - 1;
         const hp = nzm - this.mechPrev;
         this.mechPrev = nzm;
         const click = hp * this.clickE;
         this.clickE *= this.clickD;
-        center += (click * 0.45 + this.mechBP.run(nzm) * 0.8) * this.mechLvl;
+        // 협대역 노이즈를 밸브 이벤트마다 짧게 울려 "찰찰" 하는 결로 만든다 (연속으로 흘리면 저음 "웅" 노이즈가 됨)
+        this.mechEnv *= this.mechEnvD;
+        center += (click * 0.45 + this.mechBP.run(nzm) * (0.08 + 0.7 * this.mechEnv)) * this.mechLvl;
       }
 
       // ── 과급기 ──
@@ -872,14 +882,17 @@ class EngineProcessor extends AudioWorkletProcessor {
         center += Math.sin(this.subPh) * this.subLvl;
       }
 
-      // ── 스타터 모터 "위잉잉" (압축 행정마다 부하로 음정이 처짐) ──
+      // ── 스타터 모터: 피니언 기어 소음 + 브러시/기어 갈림 노이즈 ──
+      // 압축 행정 부하로 회전이 3%만 처지고 소리가 약간 굵어진다. (음정을 크게 흔들면 사이렌처럼 들림)
       if (this.starterGain > 1e-4) {
-        const comp = 0.5 + 0.5 * Math.sin(this.inPh);
-        this.stPh += TWO_PI * 330 * (1 - 0.13 * comp) / sr;
+        const comp = Math.max(0, Math.sin(this.inPh));
+        this.stLoad += (comp - this.stLoad) * this.stLoadK;
+        this.stPh += TWO_PI * 460 * (1 - 0.03 * this.stLoad) / sr;
         if (this.stPh > TWO_PI) this.stPh -= TWO_PI;
         const ph = this.stPh;
-        const s = Math.sin(ph) + 0.5 * Math.sin(2 * ph) + 0.33 * Math.sin(3 * ph) + 0.2 * Math.sin(5 * ph);
-        center += s * this.starterGain * (0.06 + 0.03 * comp);
+        const gear = Math.sin(ph) + 0.35 * Math.sin(2 * ph);
+        const grind = this.stBP.run(this.rand() * 2 - 1);
+        center += (gear * 0.012 + grind * 0.05) * this.starterGain * (0.6 + 0.4 * this.stLoad);
       }
 
       // ── 믹스 & DC 블록 ──
