@@ -204,8 +204,10 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.evLP = new Biquad();
     this.bovHP.set('hp', 1400, 0.8, this.sr);
     this.stBP = new Biquad();
-    this.stBP.set('bp', 1100, 1.4, this.sr);
+    this.stBP.set('bp', 900, 0.8, this.sr);
     this.mechEnvD = Math.exp(-1 / (0.0015 * this.sr));
+    this.tickInc = TWO_PI * 2300 / this.sr;
+    this.inLpK = 1 - Math.exp(-TWO_PI * 1600 / this.sr);
     this.stLoadK = 1 - Math.exp(-1 / (0.015 * this.sr));
 
     // 상태
@@ -221,7 +223,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.gearIndex = 0;
     this.phase = 0; this.nextIdx = 0; this.cycleOff = 0; this.nextAngle = 0;
     this.lopePh = 0; this.lopeS = 0; this.lopeHz = 1;
-    this.inPh = 0; this.camPh = 0; this.clickE = 0; this.mechPrev = 0; this.mechEnv = 0;
+    this.inPh = 0; this.camPh = 0; this.clickE = 0; this.mechEnv = 0; this.tickPh = 0; this.inLp = 0;
     this.stLoad = 0;
     this.whPh = 0; this.scPh = 0; this.trPh = 0; this.subPh = 0; this.stPh = 0;
     this.spool = 0; this.bovT = -1; this.bovAmp = 0; this.bovCool = 0;
@@ -563,7 +565,8 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.combG = 0.15 + 0.5 * ch;
     this.combMix = clamp(0.35 + 0.35 * ch - 0.3 * vk, 0.1, 0.9);
     this.tFb = -(0.12 + 0.28 * ch) * (1 + 0.8 * vk);
-    this.nzK = 1 - Math.exp(-TWO_PI * (1800 + 7000 * ch) / sr);
+    // 연소 난류 노이즈 대역: 너무 밝으면 고rpm에서 "치지직" 지글거림으로 들린다
+    this.nzK = 1 - Math.exp(-TWO_PI * (1200 + 3800 * ch) * (1 + 0.6 * vk) / sr);
     this.exGain = P.mix.exhaust * (0.65 + 0.7 * ch) * (1 + 0.5 * vk);
     this.exIn = L.exhaust;
 
@@ -582,7 +585,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     // 기계음
     this.valveInc = (rpm / 120) * P.valves / sr;
     this.mechBP.set('bp', clamp(this.fireFreq * 9, 300, 7500), 7, sr);
-    this.clickD = Math.exp(-1 / (0.0003 * sr));
+    this.clickD = Math.exp(-1 / (0.0004 * sr));
     this.mechLvl = P.mix.mech * L.mech * (0.3 + 0.7 * rn1) * (0.6 + 0.4 * load) * this.ignGain * 4;
 
     // 과급기
@@ -825,21 +828,23 @@ class EngineProcessor extends AudioWorkletProcessor {
       let center = 0;
       if (this.intakeLvl > 1e-5) {
         const am = 0.55 + 0.45 * Math.sin(this.inPh);
-        center += (this.inBP.run(this.rand() * 2 - 1) * am * 0.8 * this.inNorm + this.inRes.run((pL + pR) * 0.5) * 0.6) * this.intakeLvl;
+        // 흡기 바람 소리는 1.6kHz 위를 깎아 "치익" 하는 고역 지글거림이 남지 않게 한다
+        this.inLp += (this.inBP.run(this.rand() * 2 - 1) - this.inLp) * this.inLpK;
+        center += (this.inLp * am * 0.8 * this.inNorm + this.inRes.run((pL + pR) * 0.5) * 0.6) * this.intakeLvl;
       }
 
       // ── 기계음: 밸브 틱 + 고차 협대역 ──
       if (this.mechLvl > 1e-5) {
         this.camPh += this.valveInc;
-        if (this.camPh >= 1) { this.camPh -= 1; this.clickE = 0.5 + 0.5 * this.rand(); this.mechEnv = 1; }
-        const nzm = this.rand() * 2 - 1;
-        const hp = nzm - this.mechPrev;
-        this.mechPrev = nzm;
-        const click = hp * this.clickE;
+        if (this.camPh >= 1) { this.camPh -= 1; this.clickE = 0.6 + 0.4 * this.rand(); this.mechEnv = 1; this.tickPh = 0; }
+        // 밸브 틱: 짧게 울리는 감쇠 사인 (미분한 화이트 노이즈를 쓰면 rpm이 오를수록 "치지직" 지글거림이 됨)
+        const tick = Math.sin(this.tickPh) * this.clickE;
+        this.tickPh += this.tickInc;
         this.clickE *= this.clickD;
-        // 협대역 노이즈를 밸브 이벤트마다 짧게 울려 "찰찰" 하는 결로 만든다 (연속으로 흘리면 저음 "웅" 노이즈가 됨)
+        // 협대역 노이즈는 밸브 이벤트마다 아주 짧고 작게만
         this.mechEnv *= this.mechEnvD;
-        center += (click * 0.45 + this.mechBP.run(nzm) * (0.08 + 0.7 * this.mechEnv)) * this.mechLvl;
+        const nzm = this.mechEnv > 1e-3 ? this.rand() * 2 - 1 : 0;
+        center += (tick * 0.3 + this.mechBP.run(nzm) * 0.35 * this.mechEnv) * this.mechLvl;
       }
 
       // ── 과급기 ──
@@ -882,17 +887,13 @@ class EngineProcessor extends AudioWorkletProcessor {
         center += Math.sin(this.subPh) * this.subLvl;
       }
 
-      // ── 스타터 모터: 피니언 기어 소음 + 브러시/기어 갈림 노이즈 ──
-      // 압축 행정 부하로 회전이 3%만 처지고 소리가 약간 굵어진다. (음정을 크게 흔들면 사이렌처럼 들림)
+      // ── 스타터 모터: 순음 없이 기어·브러시가 갈리는 대역 노이즈만, 압축 행정마다 "그르르" 하고 굵어진다 ──
+      // (음정이 있는 성분을 넣으면 시동 때 사이렌이나 전자음처럼 들린다)
       if (this.starterGain > 1e-4) {
         const comp = Math.max(0, Math.sin(this.inPh));
         this.stLoad += (comp - this.stLoad) * this.stLoadK;
-        this.stPh += TWO_PI * 460 * (1 - 0.03 * this.stLoad) / sr;
-        if (this.stPh > TWO_PI) this.stPh -= TWO_PI;
-        const ph = this.stPh;
-        const gear = Math.sin(ph) + 0.35 * Math.sin(2 * ph);
         const grind = this.stBP.run(this.rand() * 2 - 1);
-        center += (gear * 0.012 + grind * 0.05) * this.starterGain * (0.6 + 0.4 * this.stLoad);
+        center += grind * 0.045 * this.starterGain * (0.3 + 0.7 * this.stLoad);
       }
 
       // ── 믹스 & DC 블록 ──

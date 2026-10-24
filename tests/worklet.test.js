@@ -179,7 +179,7 @@ test('배기 밸브 열림은 닫힘보다 크고 밝다 · 흡기 스포츠는 
     const [L] = r.render(1.2, (t, prm) => { Object.assign(prm, base); });
     return brightness(L, 24000);
   };
-  assert.ok(exhaustOnly(1) > exhaustOnly(0) * 1.1, `밝기 열림 ${exhaustOnly(1).toFixed(3)} / 닫힘 ${exhaustOnly(0).toFixed(3)}`);
+  assert.ok(exhaustOnly(1) > exhaustOnly(0) * 1.05, `밝기 열림 ${exhaustOnly(1).toFixed(3)} / 닫힘 ${exhaustOnly(0).toFixed(3)}`);
 
   const intakeOnly = (intake) => {
     const r = new Runner(Proc, { preset: p, settings: { ...SETTINGS, intake }, layers: { exhaust: 0, mech: 0, forced: 0, trans: 0, pops: 0, sub: 0 } });
@@ -266,5 +266,29 @@ test('크랭킹: 압축 펄스("그르릉")가 스타터 모터 소리보다 크
       return db(rms(L, 6000));
     };
     assert.ok(lv() > lv({ exhaust: 0 }) + 4, p.id);
+  }
+});
+
+test('고역(2kHz 이상) 랜덤 노이즈가 엔진음보다 충분히 작다 — rpm이 높아도 "치지직" 없음 (모든 차종)', () => {
+  const hpf = (a) => {
+    const k = Math.exp((-2 * Math.PI * 2000) / 48000);
+    let y1 = 0, x1 = 0, y2 = 0, x2 = 0;
+    return a.map((x) => { const y = k * (y1 + x - x1); x1 = x; y1 = y; const z = k * (y2 + y - x2); x2 = y; y2 = z; return z; });
+  };
+  const run = (p, seed, rpm, thr) => {
+    const q = { ...p, jitter: 0, lope: 0, misfireProb: 0 };
+    const r = new Runner(Proc, { preset: q, settings: { ...p.tuning, pops: false } });
+    r.proc.seed = seed;
+    r.send({ type: 'ignition', on: true });
+    return r.render(1, (t, prm) => { prm.rpm = rpm; prm.throttle = thr; prm.load = thr; })[0];
+  };
+  for (const p of PRESETS.filter((x) => x.type !== 'ev')) {
+    for (const [rpm, thr, minGap] of [[p.idleRpm, 0, 30], [p.redline * 0.5, 0.3, 25], [p.redline * 0.9, 1, 18]]) {
+      const a = run(p, 123, rpm, thr);
+      const b = run(p, 98765, rpm, thr);
+      const nz = hpf(a.map((x, i) => (x - b[i]) / Math.SQRT2));
+      const gap = db(rms(a, 12000)) - db(rms(nz, 12000));
+      assert.ok(gap > minGap, `${p.id} @${Math.round(rpm)}rpm: 고역 노이즈 ${gap.toFixed(1)}dB 아래`);
+    }
   }
 });

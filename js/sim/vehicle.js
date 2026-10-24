@@ -376,8 +376,9 @@ export class Vehicle {
       if (this.shift) [target, tau] = this.shiftTarget(this.shift, v, target, tau);
       else if (v < 0.4) tau = target > this.rpm ? p.rpmTauUp * 0.85 : p.rpmTauDown;
       if (this.engine === 'starting') {
-        const over = idle * (1 + 0.85 * Math.exp(-Math.max(0, this.engineT - 0.25) / 0.5));
-        target = Math.max(target, this.engineT < 0.25 ? idle * 1.85 : over);
+        // 점화 직후 회전이 한 번 솟았다가 공회전으로 내려앉는다 (너무 높이·깨끗하게 솟으면 "삐융" 하는 전자음처럼 들림)
+        const over = idle * (1 + 0.55 * Math.exp(-Math.max(0, this.engineT - 0.25) / 0.45));
+        target = Math.max(target, this.engineT < 0.25 ? idle * 1.55 : over);
         tau = this.engineT < 0.25 ? 0.07 : 0.2;
         if (this.engineT > 2) this.engine = 'running';
       }
