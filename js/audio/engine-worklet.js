@@ -129,7 +129,7 @@ const FALLBACK_PRESET = {
   idleRpm: 800, redline: 6500, gearRatios: [3, 2, 1.4, 1],
   exhaust: { headerLen: 0.6, tailLen: 0.45, feedback: -0.65, mufflerCutoffMin: 800, mufflerCutoffMax: 7000, xPipe: 0, combMs: [1.37, 2.23, 3.71] },
   pulse: { attackMs: 0.3, decayMs: 4, noiseAmt: 0.3 }, lope: 0.2, jitter: 0.5, misfireProb: 0.01,
-  intake: { centerMin: 300, centerMax: 1400, resHz: 260 },
+  intake: { centerMin: 300, centerMax: 1400, resHz: 260 }, mech: { tickHz: 2300 },
   mix: { exhaust: 0.6, intake: 0.14, mech: 0.06, forced: 0, trans: 0.02, sub: 0.07 },
   forced: null, whine: { teeth: [29] }, pops: { amount: 0.6, big: 0.5, minRpm: 0.3 }, outGain: 1,
 };
@@ -206,7 +206,6 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.stBP = new Biquad();
     this.stBP.set('bp', 900, 0.8, this.sr);
     this.mechEnvD = Math.exp(-1 / (0.0015 * this.sr));
-    this.tickInc = TWO_PI * 2300 / this.sr;
     this.inLpK = 1 - Math.exp(-TWO_PI * 1600 / this.sr);
     this.stLoadK = 1 - Math.exp(-1 / (0.015 * this.sr));
 
@@ -342,6 +341,7 @@ class EngineProcessor extends AudioWorkletProcessor {
         }
       }
       this.xPipe = clamp(ex.xPipe || 0, 0, 1);
+      this.tickInc = TWO_PI * clamp(p.mech?.tickHz ?? 2300, 200, sr * 0.45) / sr;
       if (hard || prevN !== n) {
         this.phase = 0;
         this.nextIdx = 0;
@@ -578,15 +578,17 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.inRes.set('bp', it.resHz * (0.9 + 0.3 * rn1), 6 + 4 * isp, sr);
     // 기본 흡기 소음은 엔진이 돌 때만 (꺼져 있을 때 노이즈가 남지 않도록)
     const inBase = 0.012 * this.ignGain * Math.min(1, rpm / 300);
-    const inTarget = (inBase + Math.pow(thr, 1.5) * Math.min(rn * 1.2, 1.2)) * P.mix.intake * L.intake * 7
+    // 흡기는 배기(엔진음) 밑에 깔리는 정도로만 — 너무 크면 엔진보다 바람 소리가 앞선다
+    const inTarget = (inBase + Math.pow(thr, 1.5) * Math.min(rn * 1.2, 1.2)) * P.mix.intake * L.intake * 4.5
       * (1 + 1.3 * isp) * (1 - 0.8 * ov);
     this.intakeLvl += (inTarget - this.intakeLvl) * (1 - Math.exp(-dtB / (inTarget > this.intakeLvl ? 0.05 : 0.03)));
 
     // 기계음
     this.valveInc = (rpm / 120) * P.valves / sr;
-    this.mechBP.set('bp', clamp(this.fireFreq * 9, 300, 7500), 7, sr);
+    // 좁은 대역(높은 Q)으로 rpm을 따라가면 전기 모터 와인처럼 들리므로 넓게 퍼뜨린다
+    this.mechBP.set('bp', clamp(this.fireFreq * 6, 300, 5000), 1.5, sr);
     this.clickD = Math.exp(-1 / (0.0004 * sr));
-    this.mechLvl = P.mix.mech * L.mech * (0.3 + 0.7 * rn1) * (0.6 + 0.4 * load) * this.ignGain * 4;
+    this.mechLvl = P.mix.mech * L.mech * (0.3 + 0.7 * rn1) * (0.6 + 0.4 * load) * this.ignGain * 2.5;
 
     // 과급기
     const F = P.forced;
@@ -604,12 +606,12 @@ class EngineProcessor extends AudioWorkletProcessor {
       const f = lerp(F.fMin, F.fMax, this.spool);
       this.whInc = TWO_PI * f / sr;
       this.turbBP.set('bp', f * 0.5, 4, sr);
-      this.whLvl = this.spool * this.spool * (0.25 + 0.75 * thr) * P.mix.forced * L.forced * 1.5 * (1 + 0.8 * isp);
+      this.whLvl = this.spool * this.spool * (0.25 + 0.75 * thr) * P.mix.forced * L.forced * 0.7 * (1 + 0.8 * isp);
       this.bovLvl = P.mix.forced * L.forced * 2.2 * (1 + 0.6 * isp);
       this.flutter = F.bov === 'flutter';
     } else if (F && F.type === 'super') {
       this.scInc = TWO_PI * ((rpm / 60) * F.ratio) / sr;
-      this.scLvl = (0.15 + 0.85 * load) * Math.pow(rn1, 0.8) * (0.3 + 0.7 * thr) * P.mix.forced * L.forced * this.ignGain * (1 + 0.5 * isp);
+      this.scLvl = (0.15 + 0.85 * load) * Math.pow(rn1, 0.8) * (0.3 + 0.7 * thr) * P.mix.forced * L.forced * this.ignGain * (1 + 0.5 * isp) * 0.6;
     }
 
     // 변속기 와인 (출력축 rpm × 기어 잇수)
@@ -617,7 +619,8 @@ class EngineProcessor extends AudioWorkletProcessor {
       const wt = (P.whine || FALLBACK_PRESET.whine).teeth;
       const teeth = wt[Math.max(0, this.gearIndex - 1) % wt.length];
       this.trInc = TWO_PI * ((rpm / this.gearRatio / 60) * teeth) / sr;
-      this.trLvl = P.mix.trans * L.trans * (0.3 + 0.7 * load) * Math.min(1, rpm / 1500);
+      // 차속을 따라 올라가는 순음이라 크면 전기차 감속기 소리가 된다 → 엔진음 밑에 희미하게만
+      this.trLvl = P.mix.trans * L.trans * (0.3 + 0.7 * load) * Math.min(1, rpm / 1500) * 0.3;
     } else {
       this.trLvl = 0;
     }
@@ -852,7 +855,8 @@ class EngineProcessor extends AudioWorkletProcessor {
         if (this.whLvl > 1e-5) {
           this.whPh += this.whInc;
           if (this.whPh > TWO_PI) this.whPh -= TWO_PI;
-          center += (Math.sin(this.whPh) * 0.6 + this.turbBP.run(this.rand() * 2 - 1) * 0.5) * this.whLvl;
+          // 순음 휘슬 비중이 크면 전기차 인버터음처럼 들린다 → 공기 소리(대역 노이즈) 위주
+          center += (Math.sin(this.whPh) * 0.2 + this.turbBP.run(this.rand() * 2 - 1) * 0.5) * this.whLvl;
         }
         if (this.bovT >= 0) {
           const t = this.bovT;
@@ -877,7 +881,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (this.trLvl > 1e-5) {
         this.trPh += this.trInc;
         if (this.trPh > TWO_PI) this.trPh -= TWO_PI;
-        center += (Math.sin(this.trPh) + 0.3 * Math.sin(2 * this.trPh)) * this.trLvl;
+        center += Math.sin(this.trPh) * this.trLvl;
       }
 
       // ── 서브베이스 ──

@@ -291,7 +291,7 @@ const RANGES = {
   'exhaust.mufflerCutoffMin': [100, 5000, 10], 'exhaust.mufflerCutoffMax': [1000, 16000, 50], 'exhaust.xPipe': [0, 1, 0.01],
   'pulse.attackMs': [0.05, 2, 0.01], 'pulse.decayMs': [0.5, 12, 0.05], 'pulse.noiseAmt': [0, 1.5, 0.01],
   'intake.centerMin': [100, 3000, 10], 'intake.centerMax': [300, 6000, 10], 'intake.resHz': [80, 1500, 5],
-  'eq.bodyResHz': [60, 400, 1], 'eq.presenceDb': [-6, 9, 0.1],
+  'mech.tickHz': [500, 8000, 10], 'eq.bodyResHz': [60, 400, 1], 'eq.presenceDb': [-6, 9, 0.1],
   'forced.lag': [0.1, 3, 0.01], 'forced.fMin': [500, 12000, 50], 'forced.fMax': [1000, 16000, 50], 'forced.ratio': [1, 40, 0.1],
 };
 const SKIP = new Set(['id', 'name', 'fullName', 'description', 'image', 'credit', 'type', 'layout', 'firingOrder', 'cylinders',
